@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { AppShell } from '@/components/layout/app-shell'
+import { QueryProvider } from '@/components/providers/query-provider'
+import { SupabaseRealtimeProvider } from '@/components/providers/supabase-realtime-provider'
 import './globals.css'
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -46,9 +48,13 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased`}>
-        <AppShell>
-          {children}
-        </AppShell>
+        <QueryProvider>
+          <SupabaseRealtimeProvider>
+            <AppShell>
+              {children}
+            </AppShell>
+          </SupabaseRealtimeProvider>
+        </QueryProvider>
         <Analytics />
       </body>
     </html>

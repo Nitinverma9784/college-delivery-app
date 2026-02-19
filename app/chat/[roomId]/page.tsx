@@ -1,57 +1,56 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
+// Refactored to use strikes-community chat architecture:
+//   ChatHeader    — adapted from strikes-community chat-header.tsx
+//   ChatMessages  — strikes-community infinite scroll + React Query + Realtime
+//   ChatInput     — adapted from strikes-community chat-input.tsx (react-hook-form/zod)
+
+import { use, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  Send,
-  Image as ImageIcon,
-  MapPin,
-  CheckCircle2,
-  IndianRupee,
-  Info,
-  Video,
-  Phone,
-  PhoneOff,
-} from "lucide-react";
-import { GlassHeader } from "@/components/layout/glass-header";
+import { CheckCircle2, Phone, PhoneOff } from "lucide-react";
+
 import { PageContainer } from "@/components/layout/page-container";
-import { DeliveryProgressPill } from "@/components/common/delivery-progress";
-import { useChatStore } from "@/lib/stores/chat-store";
+import { Button } from "@/components/ui/button";
+import ChatHeader from "@/components/chat/chat-header";
+import ChatMessages from "@/components/chat/chat-messages";
+import ChatInput from "@/components/chat/chat-input";
+
 import { useRequestStore } from "@/lib/stores/request-store";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { quickReplies } from "@/lib/mock-data";
-import { Button } from "@/components/ui/button";
 import { useWebRTC } from "@/hooks/use-webrtc";
-import type { ChatMessage } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
+import type { DeliveryStatus } from "@/lib/types";
 
+// ─── Local types ──────────────────────────────────────────────────────────────
+interface ChatRoom {
+  id: string;
+  requestId: string;
+  participants: string[];
+  itemName: string;
+  status: DeliveryStatus;
+  createdBy: string;
+  acceptedBy: string | null;
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function ChatPage({
   params,
 }: {
   params: Promise<{ roomId: string }>;
 }) {
   const { roomId } = use(params);
-  const {
-    activeRoom,
-    messages,
-    isLoading,
-    loadRoom,
-    loadMessages,
-    sendMessage,
-    subscribeToMessages,
-    unsubscribeFromMessages,
-  } = useChatStore();
   const { updateRequestStatus } = useRequestStore();
   const user = useAuthStore((s) => s.user);
-  const [input, setInput] = useState("");
+
+  const [room, setRoom] = useState<ChatRoom | null>(null);
+  const [loadingRoom, setLoadingRoom] = useState(true);
+  const [roomNotAccepted, setRoomNotAccepted] = useState(false);
   const [markingDelivered, setMarkingDelivered] = useState(false);
   const [showVideoCall, setShowVideoCall] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Get other user ID for WebRTC
-  const otherUserId = activeRoom?.participants?.find((id) => id !== user?.id) || "";
+  const otherUserId = room?.participants?.find((id) => id !== user?.id) ?? "";
 
-  // WebRTC hook
   const {
     localVideoRef,
     remoteVideoRef,
@@ -61,189 +60,249 @@ export default function ChatPage({
     startCall,
     answerCall,
     endCall,
-  } = useWebRTC(activeRoom?.id || "", user?.id || "", otherUserId);
+  } = useWebRTC(room?.id ?? "", user?.id ?? "", otherUserId);
 
-  // Load room and messages when roomId changes
+  // Load chat room.
+  // roomId may be:
+  //   (a) chat_rooms.id           — from /chat list page
+  //   (b) delivery_requests.id    — from request-card "View Chat" or dayscholar after accept
   useEffect(() => {
-    if (roomId) {
-      loadRoom(roomId);
-    }
+    if (!roomId) return;
+    setRoomNotAccepted(false);
 
-    return () => {
-      unsubscribeFromMessages();
+    const load = async () => {
+      setLoadingRoom(true);
+      const supabase = createClient();
+
+      // ── 1. Try chat_rooms.id ──────────────────────────────────────
+      const { data: byId } = await supabase
+        .from("chat_rooms")
+        .select("*")
+        .eq("id", roomId)
+        .maybeSingle();
+
+      // ── 2. Try chat_rooms.request_id ─────────────────────────────
+      let roomRow =
+        byId ??
+        (
+          await supabase
+            .from("chat_rooms")
+            .select("*")
+            .eq("request_id", roomId)
+            .maybeSingle()
+        ).data;
+
+      // ── 3. Room not found — check delivery_requests directly ─────
+      if (!roomRow) {
+        const { data: deliveryReq } = await supabase
+          .from("delivery_requests")
+          .select("id, item_name, status, created_by, accepted_by")
+          .eq("id", roomId)
+          .maybeSingle();
+
+        if (deliveryReq) {
+          if (!deliveryReq.accepted_by) {
+            // Request exists but hasn't been accepted yet
+            setRoomNotAccepted(true);
+            setLoadingRoom(false);
+            return;
+          }
+
+          // Request is accepted — create chat room on-the-fly
+          const { data: newRoom, error: insertErr } = await supabase
+            .from("chat_rooms")
+            .insert({
+              request_id: deliveryReq.id,
+              created_by: deliveryReq.created_by,
+              accepted_by: deliveryReq.accepted_by,
+            })
+            .select()
+            .single();
+
+          if (!insertErr && newRoom) {
+            // Insert welcome system message
+            await supabase.from("chat_messages").insert({
+              room_id: newRoom.id,
+              sender_id: deliveryReq.accepted_by,
+              type: "system",
+              content: "Chat started. Your order is being processed! 🛍️",
+            });
+            roomRow = newRoom;
+          } else if (insertErr?.code === "23505") {
+            // Race condition — row was just created, re-fetch it
+            const { data: existingRoom } = await supabase
+              .from("chat_rooms")
+              .select("*")
+              .eq("request_id", deliveryReq.id)
+              .maybeSingle();
+            roomRow = existingRoom ?? null;
+          }
+        }
+      }
+
+      // ── 4. Build room state ───────────────────────────────────────
+      if (roomRow) {
+        const { data: req } = await supabase
+          .from("delivery_requests")
+          .select("item_name, status")
+          .eq("id", roomRow.request_id)
+          .maybeSingle();
+        setRoom({
+          id: roomRow.id,
+          requestId: roomRow.request_id,
+          participants: [roomRow.created_by, roomRow.accepted_by].filter(
+            Boolean,
+          ) as string[],
+          itemName: req?.item_name ?? "Unknown Item",
+          status: (req?.status ?? "pending") as DeliveryStatus,
+          createdBy: roomRow.created_by,
+          acceptedBy: roomRow.accepted_by ?? null,
+        });
+      }
+      setLoadingRoom(false);
     };
-  }, [roomId, loadRoom]);
-
-  // Subscribe to messages when room is loaded
-  useEffect(() => {
-    if (activeRoom?.id) {
-      loadMessages(activeRoom.id);
-      subscribeToMessages(activeRoom.id);
-    }
-
-    return () => {
-      unsubscribeFromMessages();
-    };
-  }, [activeRoom?.id, loadMessages, subscribeToMessages]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleSend = async () => {
-    if (!input.trim() || !user || !activeRoom) return;
-    await sendMessage(input.trim());
-    setInput("");
-  };
+    load();
+  }, [roomId]);
 
   const handleQuickReply = async (reply: string) => {
-    if (!user || !activeRoom) return;
-    await sendMessage(reply);
+    if (!user || !room) return;
+    const supabase = createClient();
+    await supabase
+      .from("chat_messages")
+      .insert({ room_id: room.id, sender_id: user.id, type: "text", content: reply });
   };
 
   const handleMarkDelivered = async () => {
-    if (!activeRoom || !user) return;
-
-    // Only dayscholar (acceptor) can mark as delivered
-    if (user.role !== "dayscholar") return;
-
+    if (!room || !user || user.role !== "dayscholar") return;
     setMarkingDelivered(true);
-    const result = await updateRequestStatus(activeRoom.requestId, "delivered");
-
-    if (result.error) {
-      console.error("Error marking as delivered:", result.error);
-      setMarkingDelivered(false);
-      return;
+    const result = await updateRequestStatus(room.requestId, "delivered");
+    if (!result.error) {
+      const supabase = createClient();
+      await supabase.from("chat_messages").insert({
+        room_id: room.id,
+        sender_id: user.id,
+        type: "system",
+        content: "Order marked as delivered ✓",
+      });
     }
-
-    // Send system message
-    await sendMessage("Order marked as delivered", "system");
     setMarkingDelivered(false);
   };
 
   return (
     <PageContainer bottomNav={false} className="flex flex-col !min-h-screen">
-      <GlassHeader
-        title={activeRoom?.itemName || "Chat"}
-        subtitle={activeRoom ? `Request #${activeRoom.requestId}` : undefined}
-        showBack
-        rightAction={
-          activeRoom && (
-            <div className="flex items-center gap-2">
-              <DeliveryProgressPill status={activeRoom.status} />
-            </div>
-          )
+
+      {/* Header — adapted from strikes-community ChatHeader */}
+      <ChatHeader
+        itemName={room?.itemName ?? "Chat"}
+        requestId={room?.requestId}
+        status={room?.status}
+        onStartCall={
+          room?.participants?.length === 2
+            ? () => { startCall(); setShowVideoCall(true); }
+            : undefined
         }
+        callDisabled={isCallActive || isCallOutgoing || isCallIncoming}
+        backHref="/"
       />
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {isLoading && messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            <p className="mt-2 text-sm text-muted-foreground">Loading messages...</p>
+      {/* Messages — full strikes-community modular architecture */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {loadingRoom ? (
+          <div className="flex flex-1 items-center justify-center">
+            <div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
-        ) : !activeRoom ? (
-          <div className="flex flex-col items-center justify-center py-12">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted">
-              <Info className="h-8 w-8 text-muted-foreground" />
-            </div>
-            <p className="mt-4 text-center font-medium text-foreground">
-              Chat room not found
+        ) : !room ? (
+          <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+            <p className="font-medium text-foreground">
+              {roomNotAccepted ? "Waiting for acceptance" : "Chat room not found"}
             </p>
-            <p className="mt-1 text-center text-sm text-muted-foreground">
-              {user?.role === "hosteller" 
-                ? "Wait for a day scholar to accept your request"
-                : "This request hasn't been accepted yet"}
+            <p className="mt-1 text-sm text-muted-foreground">
+              {roomNotAccepted
+                ? "A day scholar hasn't accepted your request yet. Check back soon!"
+                : user?.role === "hosteller"
+                ? "This chat doesn't exist. Go back and open a chat from an accepted request."
+                : "This request hasn't been accepted yet."}
             </p>
           </div>
         ) : (
-          <AnimatePresence initial={false}>
-            {messages.map((msg) => (
-              <MessageBubble
-                key={msg.id}
-                message={msg}
-                isOwn={msg.senderId === user?.id}
-              />
-            ))}
-          </AnimatePresence>
+          // ChatMessages owns: useChatQuery (infinite scroll) +
+          //                     useChatRealtime (live updates) +
+          //                     useChatScroll (auto-scroll / load-more)
+          <ChatMessages
+            roomId={room.id}
+            currentUserId={user?.id ?? ""}
+            itemName={room.itemName}
+          />
         )}
-        <div ref={messagesEndRef} />
       </div>
 
-      {/* Mark as Delivered Button - Only for dayscholar when status is not delivered */}
-      {user?.role === "dayscholar" && 
-       activeRoom && 
-       activeRoom.status !== "delivered" && 
-       activeRoom.status !== "pending" && (
-        <div className="border-t border-border bg-card px-4 py-3">
-          <Button
-            onClick={handleMarkDelivered}
-            disabled={markingDelivered}
-            className="w-full h-12 rounded-xl bg-primary text-primary-foreground font-semibold"
-          >
-            {markingDelivered ? (
-              <div className="flex items-center gap-2">
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
-                Marking as delivered...
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5" />
-                Mark as Delivered
-              </div>
-            )}
-          </Button>
+      {/* Mark as Delivered */}
+      {user?.role === "dayscholar" &&
+        room &&
+        room.status !== "delivered" &&
+        room.status !== "pending" && (
+          <div className="border-t border-border bg-card px-4 py-3">
+            <Button
+              onClick={handleMarkDelivered}
+              disabled={markingDelivered}
+              className="w-full h-11 rounded-xl font-semibold"
+            >
+              {markingDelivered ? (
+                <span className="flex items-center gap-2">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+                  Marking as delivered...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5" />
+                  Mark as Delivered
+                </span>
+              )}
+            </Button>
+          </div>
+        )}
+
+      {/* Quick Reply Chips */}
+      {room && (
+        <div className="border-t border-border bg-card/50 px-4 py-2">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {quickReplies.map((reply) => (
+              <button
+                key={reply}
+                onClick={() => handleQuickReply(reply)}
+                className="shrink-0 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+              >
+                {reply}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Quick Reply Chips */}
-      <div className="border-t border-border bg-card/50 px-4 py-2">
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {quickReplies.map((reply) => (
-            <button
-              key={reply}
-              onClick={() => handleQuickReply(reply)}
-              className="shrink-0 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
-            >
-              {reply}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Chat Input — adapted from strikes-community ChatInput (react-hook-form + zod) */}
+      {room && (
+        <ChatInput
+          roomId={room.id}
+          currentUserId={user?.id ?? ""}
+          placeholder={`Message about ${room.itemName}…`}
+        />
+      )}
 
-      {/* Video Call UI */}
+      {/* Video Call Overlay */}
       {(showVideoCall || isCallActive) && (
         <div className="fixed inset-0 z-50 bg-background">
           <div className="flex h-full flex-col">
-            {/* Remote Video */}
             <div className="relative flex-1 bg-black">
-              <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                className="h-full w-full object-cover"
-              />
-              {/* Local Video (Picture-in-Picture) */}
+              <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-cover" />
               {localVideoRef.current?.srcObject && (
-                <div className="absolute bottom-4 right-4 w-32 rounded-lg overflow-hidden border-2 border-white shadow-lg">
-                  <video
-                    ref={localVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="h-full w-full object-cover"
-                  />
+                <div className="absolute bottom-4 right-4 w-32 overflow-hidden rounded-lg border-2 border-white shadow-lg">
+                  <video ref={localVideoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
                 </div>
               )}
-              {/* Call Controls */}
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-3">
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
                 <Button
-                  onClick={() => {
-                    endCall();
-                    setShowVideoCall(false);
-                  }}
-                  className="h-12 w-12 rounded-full bg-red-500 hover:bg-red-600"
+                  onClick={() => { endCall(); setShowVideoCall(false); }}
+                  className="h-12 w-12 rounded-full bg-red-500 hover:bg-red-600 p-0"
                 >
                   <PhoneOff className="h-5 w-5" />
                 </Button>
@@ -253,211 +312,47 @@ export default function ChatPage({
         </div>
       )}
 
-      {/* Incoming Call Notification */}
-      {isCallIncoming && !showVideoCall && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
-          <div className="rounded-2xl bg-card p-6 shadow-lg">
-            <h3 className="text-lg font-semibold">Incoming Call</h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              {activeRoom?.itemName}
-            </p>
-            <div className="mt-4 flex gap-2">
-              <Button
-                onClick={() => {
-                  answerCall();
-                  setShowVideoCall(true);
-                }}
-                className="flex-1 bg-primary"
-              >
-                Answer
-              </Button>
-              <Button
-                onClick={endCall}
-                variant="destructive"
-                className="flex-1"
-              >
-                Decline
-              </Button>
+      {/* Incoming Call */}
+      <AnimatePresence>
+        {isCallIncoming && !showVideoCall && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+          >
+            <div className="rounded-2xl bg-card p-6 shadow-lg">
+              <h3 className="text-lg font-semibold">Incoming Call</h3>
+              <p className="mt-1 text-sm text-muted-foreground">{room?.itemName}</p>
+              <div className="mt-4 flex gap-2">
+                <Button onClick={() => { answerCall(); setShowVideoCall(true); }} className="flex-1">Answer</Button>
+                <Button onClick={endCall} variant="destructive" className="flex-1">Decline</Button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Outgoing Call Notification */}
-      {isCallOutgoing && !showVideoCall && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
-          <div className="rounded-2xl bg-card p-6 shadow-lg text-center">
-            <div className="h-16 w-16 mx-auto mb-4 rounded-full bg-primary/10 flex items-center justify-center">
-              <Phone className="h-8 w-8 text-primary animate-pulse" />
-            </div>
-            <h3 className="text-lg font-semibold">Calling...</h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              {activeRoom?.itemName}
-            </p>
-            <Button
-              onClick={endCall}
-              variant="destructive"
-              className="mt-4"
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Input */}
-      <div className="sticky bottom-0 border-t border-border bg-card px-4 py-3 safe-area-bottom">
-        <div className="flex items-center gap-2">
-          <button
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            aria-label="Send image"
-          >
-            <ImageIcon className="h-5 w-5" />
-          </button>
-          <button
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            aria-label="Send location"
-          >
-            <MapPin className="h-5 w-5" />
-          </button>
-          {activeRoom && activeRoom.participants?.length === 2 && (
-            <button
-              onClick={() => {
-                startCall();
-                setShowVideoCall(true);
-              }}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-primary transition-colors hover:bg-primary/10"
-              aria-label="Start video call"
-              disabled={isCallActive || isCallOutgoing || isCallIncoming}
-            >
-              <Video className="h-5 w-5" />
-            </button>
-          )}
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
-            placeholder="Type a message..."
-            className="h-10 flex-1 rounded-xl border border-border bg-background px-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-          <motion.button
-            whileTap={{ scale: 0.9 }}
-            onClick={handleSend}
-            disabled={!input.trim()}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
-            aria-label="Send message"
-          >
-            <Send className="h-4 w-4" />
-          </motion.button>
-        </div>
-      </div>
-    </PageContainer>
-  );
-}
-
-function MessageBubble({
-  message,
-  isOwn,
-}: {
-  message: ChatMessage;
-  isOwn: boolean;
-}) {
-  if (message.type === "system") {
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-center gap-1.5 py-1"
-      >
-        <Info className="h-3 w-3 text-muted-foreground" />
-        <span className="text-xs text-muted-foreground">{message.content}</span>
-      </motion.div>
-    );
-  }
-
-  if (message.type === "price_confirmation") {
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="mx-auto max-w-[280px]"
-      >
-        <div className="rounded-2xl border border-border bg-card p-4 text-center shadow-sm">
-          <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
-            <IndianRupee className="h-3 w-3" />
-            Price Confirmation
-          </div>
-          <p className="mt-2 text-2xl font-bold text-foreground">
-            <IndianRupee className="inline h-5 w-5" />
-            {message.price}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {message.content}
-          </p>
-          <div className="mt-3 flex gap-2">
-            <button className="flex-1 rounded-xl bg-primary py-2 text-xs font-semibold text-primary-foreground">
-              Confirm
-            </button>
-            <button className="flex-1 rounded-xl border border-border py-2 text-xs font-semibold text-foreground">
-              Negotiate
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    );
-  }
-
-  if (message.type === "image") {
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className={cn("flex", isOwn ? "justify-end" : "justify-start")}
-      >
-        <div
-          className={cn(
-            "max-w-[240px] overflow-hidden rounded-2xl",
-            isOwn
-              ? "bg-primary text-primary-foreground"
-              : "bg-card border border-border text-foreground"
-          )}
-        >
-          <div className="flex h-32 items-center justify-center bg-muted">
-            <ImageIcon className="h-8 w-8 text-muted-foreground" />
-          </div>
-          <p className="px-3 py-2 text-xs">{message.content}</p>
-        </div>
-      </motion.div>
-    );
-  }
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cn("flex", isOwn ? "justify-end" : "justify-start")}
-    >
-      <div
-        className={cn(
-          "max-w-[75%] rounded-2xl px-4 py-2.5",
-          isOwn
-            ? "bg-primary text-primary-foreground rounded-br-md"
-            : "bg-card border border-border text-foreground rounded-bl-md"
+          </motion.div>
         )}
-      >
-        <p className="text-sm leading-relaxed">{message.content}</p>
-        <p
-          className={cn(
-            "mt-1 text-[10px]",
-            isOwn ? "text-primary-foreground/70" : "text-muted-foreground"
-          )}
-        >
-          {new Date(message.timestamp).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
-        </p>
-      </div>
-    </motion.div>
+      </AnimatePresence>
+
+      {/* Outgoing Call */}
+      <AnimatePresence>
+        {isCallOutgoing && !showVideoCall && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/50"
+          >
+            <div className="rounded-2xl bg-card p-6 text-center shadow-lg">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+                <Phone className="h-8 w-8 animate-pulse text-primary" />
+              </div>
+              <h3 className="text-lg font-semibold">Calling...</h3>
+              <p className="mt-1 text-sm text-muted-foreground">{room?.itemName}</p>
+              <Button onClick={endCall} variant="destructive" className="mt-4">Cancel</Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </PageContainer>
   );
 }

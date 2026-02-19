@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Camera, Minus, Plus, CheckCircle2, Sparkles } from "lucide-react";
@@ -22,7 +22,7 @@ const urgencyOptions: { value: UrgencyLevel; label: string; color: string }[] = 
   { value: "high", label: "Urgent", color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
 ];
 
-export default function CreateRequestPage() {
+function CreateRequestPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const createRequest = useRequestStore((s) => s.createRequest);
@@ -291,5 +291,13 @@ export default function CreateRequestPage() {
         )}
       </AnimatePresence>
     </PageContainer>
+  );
+}
+
+export default function CreateRequestPage() {
+  return (
+    <Suspense>
+      <CreateRequestPageInner />
+    </Suspense>
   );
 }

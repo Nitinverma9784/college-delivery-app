@@ -9,13 +9,13 @@ import { useAuthStore } from "@/lib/stores/auth-store";
 const hostellerNav = [
   { href: "/hosteller/home", icon: Home, label: "Home" },
   { href: "/hosteller/request", icon: PlusCircle, label: "Request" },
-  { href: "/chat/chat1", icon: MessageCircle, label: "Chat" },
+  { href: "/chat", icon: MessageCircle, label: "Chats" },
   { href: "/profile", icon: User, label: "Profile" },
 ];
 
 const dayscholarNav = [
   { href: "/dayscholar/home", icon: Home, label: "Home" },
-  { href: "/chat/chat1", icon: MessageCircle, label: "Chat" },
+  { href: "/chat", icon: MessageCircle, label: "Chats" },
   { href: "/profile", icon: User, label: "Profile" },
 ];
 
