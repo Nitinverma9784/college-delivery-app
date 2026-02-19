@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { MapPin, Clock, IndianRupee } from "lucide-react";
+import { MapPin, Clock, IndianRupee, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DeliveryRequest } from "@/lib/types";
 import { StatusBadge, UrgencyBadge } from "./status-badge";
@@ -70,14 +70,45 @@ export function RequestCard({
         </p>
       )}
 
+      {/* Show requester and acceptor names */}
+      <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+        <div className="flex items-center gap-1">
+          <User className="h-3 w-3" />
+          <span>
+            Requested by: <span className="font-medium text-foreground">{request.createdBy.name}</span>
+          </span>
+        </div>
+        {request.acceptedBy && (
+          <div className="flex items-center gap-1">
+            <User className="h-3 w-3 text-primary" />
+            <span>
+              Accepted by: <span className="font-medium text-primary">{request.acceptedBy.name}</span>
+            </span>
+          </div>
+        )}
+      </div>
+
       <div className="mt-3 flex items-center gap-2">
         {variant === "hosteller" && (
-          <Link
-            href={`/hosteller/orders/${request.id}`}
-            className="flex-1 rounded-xl bg-secondary px-4 py-2.5 text-center text-sm font-medium text-secondary-foreground transition-colors hover:bg-accent"
-          >
-            View Details
-          </Link>
+          <>
+            {request.acceptedBy ? (
+              // Show View Chat button when request is accepted
+              <Link
+                href={`/chat/${request.id}`}
+                className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-center text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                View Chat
+              </Link>
+            ) : (
+              // Show View Details button when not accepted yet
+              <Link
+                href={`/hosteller/orders/${request.id}`}
+                className="flex-1 rounded-xl bg-secondary px-4 py-2.5 text-center text-sm font-medium text-secondary-foreground transition-colors hover:bg-accent"
+              >
+                View Details
+              </Link>
+            )}
+          </>
         )}
         {variant === "dayscholar" && request.status === "pending" && onAccept && (
           <motion.button
@@ -88,12 +119,12 @@ export function RequestCard({
             Accept Request
           </motion.button>
         )}
-        {variant === "dayscholar" && request.status !== "pending" && (
+        {variant === "dayscholar" && request.status !== "pending" && request.acceptedBy && (
           <Link
             href={`/chat/${request.id}`}
             className="flex-1 rounded-xl bg-secondary px-4 py-2.5 text-center text-sm font-medium text-secondary-foreground transition-colors hover:bg-accent"
           >
-            Open Chat
+            View Chat
           </Link>
         )}
       </div>

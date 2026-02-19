@@ -6,9 +6,15 @@ import { useAuthStore } from "@/lib/stores/auth-store";
 
 export default function Home() {
   const router = useRouter();
-  const { isAuthenticated, user } = useAuthStore();
+  const { isAuthenticated, user, isLoading, initializeAuth } = useAuthStore();
 
   useEffect(() => {
+    initializeAuth();
+  }, [initializeAuth]);
+
+  useEffect(() => {
+    if (isLoading) return;
+
     if (!isAuthenticated) {
       router.replace("/login");
     } else if (user?.role === "hosteller") {
@@ -18,7 +24,7 @@ export default function Home() {
     } else {
       router.replace("/role-select");
     }
-  }, [isAuthenticated, user, router]);
+  }, [isAuthenticated, user, isLoading, router]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Zap, CheckCircle2 } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-container";
@@ -9,23 +10,49 @@ import { useAuthStore } from "@/lib/stores/auth-store";
 import { useRequestStore } from "@/lib/stores/request-store";
 
 export default function DayScholarHome() {
+  const router = useRouter();
   const user = useAuthStore((s) => s.user);
-  const { requests, acceptRequest } = useRequestStore();
+  const { requests, acceptRequest, fetchRequests, subscribeToRequests, unsubscribeFromRequests, isLoading } = useRequestStore();
   const [acceptedId, setAcceptedId] = useState<string | null>(null);
 
-  const pendingRequests = requests.filter((r) => r.status === "pending");
+  // Fetch requests and subscribe to real-time updates
+  useEffect(() => {
+    fetchRequests();
+    subscribeToRequests();
+
+    // Cleanup subscription on unmount
+    return () => {
+      unsubscribeFromRequests();
+    };
+  }, [fetchRequests, subscribeToRequests, unsubscribeFromRequests]);
+
+  // Pending = no one has accepted yet
+  const pendingRequests = requests.filter(
+    (r) => r.status === "pending" && !r.acceptedBy
+  );
   const activeRequests = requests.filter(
     (r) =>
       r.status !== "pending" &&
       r.status !== "delivered" &&
       r.acceptedBy?.id === user?.id
   );
+  // Show accepted requests that are not pending (for showing View Chat button)
+  const acceptedRequests = requests.filter(
+    (r) => r.acceptedBy?.id === user?.id && r.status !== "pending"
+  );
 
-  const handleAccept = (id: string) => {
+  const handleAccept = async (id: string) => {
     setAcceptedId(id);
-    setTimeout(() => {
-      acceptRequest(id);
+    const result = await acceptRequest(id);
+    if (result.error) {
+      console.error("Error accepting request:", result.error);
       setAcceptedId(null);
+      return;
+    }
+    setTimeout(() => {
+      setAcceptedId(null);
+      // Redirect to chat with hosteller
+      router.push(`/chat/${id}`);
     }, 800);
   };
 
@@ -87,8 +114,14 @@ export default function DayScholarHome() {
           </p>
 
           <div className="mt-4 space-y-3">
-            <AnimatePresence>
-              {pendingRequests.length === 0 ? (
+            {isLoading && requests.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 py-16 text-center">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <p className="text-sm text-muted-foreground">Loading requests...</p>
+              </div>
+            ) : (
+              <AnimatePresence>
+                {pendingRequests.length === 0 ? (
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -135,7 +168,8 @@ export default function DayScholarHome() {
                   </div>
                 ))
               )}
-            </AnimatePresence>
+              </AnimatePresence>
+            )}
           </div>
         </div>
 

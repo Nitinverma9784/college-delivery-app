@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Package } from "lucide-react";
@@ -13,17 +13,39 @@ import { Label } from "@/components/ui/label";
 export default function LoginPage() {
   const router = useRouter();
   const login = useAuthStore((s) => s.login);
+  const user = useAuthStore((s) => s.user);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  // Redirect after successful login
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      if (user.role === "hosteller") {
+        router.push("/hosteller/home");
+      } else if (user.role === "dayscholar") {
+        router.push("/dayscholar/home");
+      } else {
+        router.push("/role-select");
+      }
+    }
+  }, [isAuthenticated, user, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 800));
-    login(email, password);
-    router.push("/role-select");
+    
+    const result = await login(email, password);
+    
+    if (result.error) {
+      setError(result.error);
+      setLoading(false);
+    }
+    // Redirect will happen via useEffect when user state updates
   };
 
   return (
@@ -92,6 +114,10 @@ export default function LoginPage() {
               </button>
             </div>
           </div>
+
+          {error && (
+            <p className="text-sm font-medium text-destructive">{error}</p>
+          )}
 
           <Button
             type="submit"

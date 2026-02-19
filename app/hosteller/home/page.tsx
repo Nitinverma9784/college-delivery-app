@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { Plus, Package, Sparkles } from "lucide-react";
@@ -10,10 +11,21 @@ import { useRequestStore } from "@/lib/stores/request-store";
 
 export default function HostellerHome() {
   const user = useAuthStore((s) => s.user);
-  const requests = useRequestStore((s) => s.requests);
+  const { requests, fetchRequests, subscribeToRequests, unsubscribeFromRequests, isLoading } = useRequestStore();
+
+  // Fetch requests and subscribe to real-time updates
+  useEffect(() => {
+    fetchRequests();
+    subscribeToRequests();
+
+    // Cleanup subscription on unmount
+    return () => {
+      unsubscribeFromRequests();
+    };
+  }, [fetchRequests, subscribeToRequests, unsubscribeFromRequests]);
 
   const myRequests = requests.filter(
-    (r) => r.createdBy.id === user?.id || r.createdBy.name === user?.name
+    (r) => r.createdBy.id === user?.id
   );
 
   const greeting = getGreeting();
@@ -91,7 +103,12 @@ export default function HostellerHome() {
             </span>
           </div>
 
-          {myRequests.length === 0 ? (
+          {isLoading && myRequests.length === 0 ? (
+            <div className="mt-8 flex flex-col items-center gap-3 text-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <p className="text-sm text-muted-foreground">Loading your orders...</p>
+            </div>
+          ) : myRequests.length === 0 ? (
             <div className="mt-8 flex flex-col items-center gap-3 text-center">
               <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted">
                 <Package className="h-8 w-8 text-muted-foreground" />
@@ -116,6 +133,30 @@ export default function HostellerHome() {
             </div>
           )}
         </div>
+
+        {/* Active Chats - Show requests that have been accepted */}
+        {myRequests.filter((r) => r.acceptedBy).length > 0 && (
+          <div className="mt-8">
+            <h2 className="text-lg font-semibold text-foreground">
+              Active Chats
+            </h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              Requests accepted by day scholars
+            </p>
+            <div className="mt-4 space-y-3">
+              {myRequests
+                .filter((r) => r.acceptedBy && r.status !== "delivered")
+                .map((req, i) => (
+                  <RequestCard
+                    key={req.id}
+                    request={req}
+                    variant="hosteller"
+                    index={i}
+                  />
+                ))}
+            </div>
+          </div>
+        )}
       </div>
     </PageContainer>
   );

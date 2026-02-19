@@ -7,6 +7,7 @@ import { Camera, Minus, Plus, CheckCircle2, Sparkles } from "lucide-react";
 import { GlassHeader } from "@/components/layout/glass-header";
 import { PageContainer } from "@/components/layout/page-container";
 import { useRequestStore } from "@/lib/stores/request-store";
+import { useAuthStore } from "@/lib/stores/auth-store";
 import { itemSuggestions } from "@/lib/mock-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,15 +26,18 @@ export default function CreateRequestPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const createRequest = useRequestStore((s) => s.createRequest);
+  const user = useAuthStore((s) => s.user);
 
   const [itemName, setItemName] = useState(searchParams.get("item") || "");
   const [quantity, setQuantity] = useState(1);
   const [price, setPrice] = useState("");
   const [urgency, setUrgency] = useState<UrgencyLevel>("medium");
   const [notes, setNotes] = useState("");
+  const [hostelBlock, setHostelBlock] = useState("Block A");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const filteredSuggestions = itemSuggestions.filter((s) =>
@@ -42,15 +46,29 @@ export default function CreateRequestPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) {
+      setError("Please login to create a request");
+      return;
+    }
+
+    setError("");
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    createRequest({
+
+    const result = await createRequest({
       itemName,
       quantity,
       estimatedPrice: Number(price),
       urgency,
       notes: notes || undefined,
+      hostelBlock,
     });
+
+    if (result.error) {
+      setError(result.error);
+      setLoading(false);
+      return;
+    }
+
     setLoading(false);
     setSuccess(true);
     setTimeout(() => router.push("/hosteller/home"), 1500);
@@ -183,6 +201,21 @@ export default function CreateRequestPage() {
               />
             </div>
 
+            {/* Hostel Block */}
+            <div className="space-y-2">
+              <Label className="text-sm font-medium text-foreground">
+                Hostel Block
+              </Label>
+              <Input
+                type="text"
+                value={hostelBlock}
+                onChange={(e) => setHostelBlock(e.target.value)}
+                placeholder="e.g. Block A"
+                required
+                className="h-12 rounded-xl bg-card"
+              />
+            </div>
+
             {/* Image Upload */}
             <div className="space-y-2">
               <Label className="text-sm font-medium text-foreground">
@@ -235,9 +268,13 @@ export default function CreateRequestPage() {
               />
             </div>
 
+            {error && (
+              <p className="text-sm font-medium text-destructive">{error}</p>
+            )}
+
             <Button
               type="submit"
-              disabled={loading || !itemName || !price}
+              disabled={loading || !itemName || !price || !hostelBlock}
               className="h-12 w-full rounded-xl text-base font-semibold"
             >
               {loading ? (

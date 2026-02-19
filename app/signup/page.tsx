@@ -3,12 +3,14 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, Package } from "lucide-react";
+import { Eye, EyeOff, Package, Building2, GraduationCap } from "lucide-react";
 import { motion } from "framer-motion";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import type { UserRole } from "@/lib/types";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -17,6 +19,7 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [role, setRole] = useState<UserRole>("hosteller");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -27,11 +30,23 @@ export default function SignupPage() {
       setError("Passwords do not match");
       return;
     }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
     setError("");
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 800));
-    signup(name, email, password);
-    router.push("/role-select");
+    
+    const result = await signup(name, email, password, role);
+    
+    if (result.error) {
+      setError(result.error);
+      setLoading(false);
+      return;
+    }
+    
+    // Redirect based on role
+    router.push(role === "hosteller" ? "/hosteller/home" : "/dayscholar/home");
   };
 
   return (
@@ -129,6 +144,34 @@ export default function SignupPage() {
               required
               className="h-12 rounded-xl bg-card"
             />
+          </div>
+
+          <div className="space-y-3">
+            <Label className="text-sm font-medium text-foreground">
+              I am a
+            </Label>
+            <RadioGroup value={role} onValueChange={(value) => setRole(value as UserRole)}>
+              <div className="flex items-center space-x-2 rounded-xl border border-border bg-card p-4 hover:bg-accent/50 transition-colors">
+                <RadioGroupItem value="hosteller" id="hosteller" />
+                <Label htmlFor="hosteller" className="flex items-center gap-2 cursor-pointer flex-1">
+                  <Building2 className="h-5 w-5 text-primary" />
+                  <div>
+                    <div className="font-medium">Hosteller</div>
+                    <div className="text-xs text-muted-foreground">I live on campus</div>
+                  </div>
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2 rounded-xl border border-border bg-card p-4 hover:bg-accent/50 transition-colors">
+                <RadioGroupItem value="dayscholar" id="dayscholar" />
+                <Label htmlFor="dayscholar" className="flex items-center gap-2 cursor-pointer flex-1">
+                  <GraduationCap className="h-5 w-5 text-primary" />
+                  <div>
+                    <div className="font-medium">Day Scholar</div>
+                    <div className="text-xs text-muted-foreground">I commute daily</div>
+                  </div>
+                </Label>
+              </div>
+            </RadioGroup>
           </div>
 
           {error && (

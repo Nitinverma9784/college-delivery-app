@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Building2, GraduationCap, Package } from "lucide-react";
@@ -28,11 +29,20 @@ const roles: {
 
 export default function RoleSelectPage() {
   const router = useRouter();
-  const selectRole = useAuthStore((s) => s.selectRole);
+  const updateUserRole = useAuthStore((s) => s.updateUserRole);
+  const [loading, setLoading] = useState(false);
 
-  const handleSelect = (role: UserRole) => {
-    selectRole(role);
-    router.push(role === "hosteller" ? "/hosteller/home" : "/dayscholar/home");
+  const handleSelect = async (role: UserRole) => {
+    setLoading(true);
+    const result = await updateUserRole(role);
+    
+    if (!result.error) {
+      router.push(role === "hosteller" ? "/hosteller/home" : "/dayscholar/home");
+    } else {
+      setLoading(false);
+      // Handle error - you might want to show a toast here
+      console.error("Failed to update role:", result.error);
+    }
   };
 
   return (
@@ -67,7 +77,8 @@ export default function RoleSelectPage() {
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={() => handleSelect(r.role)}
-              className="flex w-full items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition-shadow hover:shadow-md"
+              disabled={loading}
+              className="flex w-full items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition-shadow hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <r.icon className="h-6 w-6" />

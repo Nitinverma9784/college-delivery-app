@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -13,22 +14,54 @@ import {
   LogOut,
   ChevronRight,
   Settings,
+  Building2,
+  GraduationCap,
+  CheckCircle2,
 } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-container";
 import { BottomNavigation } from "@/components/layout/bottom-navigation";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { useUIStore } from "@/lib/stores/ui-store";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
+import type { UserRole } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export default function ProfilePage() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const updateUserRole = useAuthStore((s) => s.updateUserRole);
   const { darkMode, toggleTheme } = useUIStore();
+  const [updatingRole, setUpdatingRole] = useState(false);
+  const [roleUpdateSuccess, setRoleUpdateSuccess] = useState(false);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     router.push("/login");
+  };
+
+  const handleRoleChange = async (newRole: UserRole) => {
+    if (newRole === user?.role) return;
+
+    setUpdatingRole(true);
+    setRoleUpdateSuccess(false);
+
+    const result = await updateUserRole(newRole);
+
+    if (result.error) {
+      console.error("Error updating role:", result.error);
+      setUpdatingRole(false);
+      return;
+    }
+
+    setRoleUpdateSuccess(true);
+    setUpdatingRole(false);
+
+    // Redirect to appropriate page based on new role
+    setTimeout(() => {
+      router.push(newRole === "hosteller" ? "/hosteller/home" : "/dayscholar/home");
+    }, 1000);
   };
 
   if (!user) {
@@ -155,6 +188,60 @@ export default function ProfilePage() {
                 />
               </div>
             </button>
+
+            <div className="mx-5 h-px bg-border" />
+
+            {/* Role Selection */}
+            <div className="px-5 py-4">
+              <Label className="text-sm font-medium text-foreground mb-3 block">
+                Your Role
+              </Label>
+              <RadioGroup
+                value={user?.role || "hosteller"}
+                onValueChange={(value) => handleRoleChange(value as UserRole)}
+                disabled={updatingRole}
+                className="space-y-2"
+              >
+                <div className="flex items-center space-x-2 rounded-xl border border-border bg-card p-4 hover:bg-accent/50 transition-colors">
+                  <RadioGroupItem value="hosteller" id="hosteller" disabled={updatingRole} />
+                  <Label htmlFor="hosteller" className="flex items-center gap-2 cursor-pointer flex-1">
+                    <Building2 className="h-5 w-5 text-primary" />
+                    <div>
+                      <div className="font-medium">Hosteller</div>
+                      <div className="text-xs text-muted-foreground">I live on campus</div>
+                    </div>
+                  </Label>
+                  {user?.role === "hosteller" && (
+                    <CheckCircle2 className="h-5 w-5 text-primary" />
+                  )}
+                </div>
+                <div className="flex items-center space-x-2 rounded-xl border border-border bg-card p-4 hover:bg-accent/50 transition-colors">
+                  <RadioGroupItem value="dayscholar" id="dayscholar" disabled={updatingRole} />
+                  <Label htmlFor="dayscholar" className="flex items-center gap-2 cursor-pointer flex-1">
+                    <GraduationCap className="h-5 w-5 text-primary" />
+                    <div>
+                      <div className="font-medium">Day Scholar</div>
+                      <div className="text-xs text-muted-foreground">I commute daily</div>
+                    </div>
+                  </Label>
+                  {user?.role === "dayscholar" && (
+                    <CheckCircle2 className="h-5 w-5 text-primary" />
+                  )}
+                </div>
+              </RadioGroup>
+              {updatingRole && (
+                <p className="mt-2 text-xs text-muted-foreground flex items-center gap-2">
+                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  Updating role...
+                </p>
+              )}
+              {roleUpdateSuccess && (
+                <p className="mt-2 text-xs text-primary flex items-center gap-2">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Role updated! Redirecting...
+                </p>
+              )}
+            </div>
 
             <div className="mx-5 h-px bg-border" />
 
